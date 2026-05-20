@@ -114,6 +114,18 @@ export async function extractInsight(bookId: string, formData: FormData) {
     latency_ms: latencyMs,
   });
 
+  // Schedule resurfacing check-ins
+  const now = new Date();
+  const resurfaceDays = [7, 14, 30];
+  await supabase.from("resurfacing_queue").insert(
+    resurfaceDays.map((days) => ({
+      user_id: user.id,
+      insight_id: insight.id,
+      scheduled_for: new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString(),
+      resurface_type: `${days}d`,
+    }))
+  );
+
   // Increment book insight count
   await supabase
     .from("books")
