@@ -1,8 +1,15 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
-import { ArrowLeft, Plus, Lightbulb, CheckCircle2, Circle, Clock } from "lucide-react";
-import type { Book, InsightWithActions } from "@/types";
+import {
+  ArrowLeft,
+  Plus,
+  Lightbulb,
+  CheckCircle2,
+  Circle,
+  Clock,
+} from "lucide-react";
+import type { Book, InsightAction, InsightWithActions } from "@/types";
 
 const STATUS_COLOR: Record<string, string> = {
   reading: "bg-blue-50 text-blue-700",
@@ -17,51 +24,103 @@ const ACTION_STATUS_ICON: Record<string, React.ReactNode> = {
   skipped: <Circle size={14} className="text-zinc-200" />,
 };
 
+const BILINGUAL_SEP = "\n\n---\n\n";
+
+function BilingualText({
+  text,
+  className,
+}: {
+  text: string | null;
+  className?: string;
+}) {
+  if (!text) return null;
+
+  if (!text.includes(BILINGUAL_SEP)) {
+    return <p className={className}>{text}</p>;
+  }
+
+  const [english, nepali] = text.split(BILINGUAL_SEP);
+
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500">
+          EN
+        </span>
+        <p className={`border-l-2 border-blue-100 pl-3 ${className ?? ""}`}>
+          {english}
+        </p>
+      </div>
+      <div className="space-y-1">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-purple-500">
+          ने
+        </span>
+        <p className={`border-l-2 border-purple-100 pl-3 ${className ?? ""}`}>
+          {nepali}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ActionItem({ action }: { action: InsightAction }) {
+  const isBilingual = action.action_text.includes(BILINGUAL_SEP);
+
+  return (
+    <li className="flex items-start gap-2">
+      <span className="mt-0.5 shrink-0">
+        {ACTION_STATUS_ICON[action.status] ?? ACTION_STATUS_ICON.pending}
+      </span>
+      <div className="space-y-1 flex-1">
+        {isBilingual ? (
+          <BilingualText text={action.action_text} className="text-sm text-zinc-700" />
+        ) : (
+          <p className="text-sm text-zinc-700">{action.action_text}</p>
+        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {action.suggested_timeframe && (
+            <span className="flex items-center gap-1 text-xs text-zinc-400">
+              <Clock size={10} />
+              {action.suggested_timeframe}
+            </span>
+          )}
+          {action.context_tags.map((tag) => (
+            <span
+              key={tag}
+              className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      </div>
+    </li>
+  );
+}
+
 function InsightCard({ insight }: { insight: InsightWithActions }) {
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-6 space-y-4">
-      {/* Core idea */}
-      <p className="text-zinc-900 leading-relaxed">{insight.ai_core_idea}</p>
+      <BilingualText
+        text={insight.ai_core_idea}
+        className="text-zinc-900 leading-relaxed"
+      />
 
-      {/* Why it matters */}
       {insight.ai_why_it_matters && (
-        <p className="text-sm text-zinc-500 leading-relaxed border-l-2 border-zinc-200 pl-3">
-          {insight.ai_why_it_matters}
-        </p>
+        <BilingualText
+          text={insight.ai_why_it_matters}
+          className="text-sm text-zinc-500 leading-relaxed"
+        />
       )}
 
-      {/* Actions */}
       {insight.insight_actions.length > 0 && (
         <div className="space-y-2 pt-1">
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
             Actions
           </p>
-          <ul className="space-y-2">
+          <ul className="space-y-3">
             {insight.insight_actions.map((action) => (
-              <li key={action.id} className="flex items-start gap-2">
-                <span className="mt-0.5 shrink-0">
-                  {ACTION_STATUS_ICON[action.status] ?? ACTION_STATUS_ICON.pending}
-                </span>
-                <div className="space-y-0.5">
-                  <p className="text-sm text-zinc-700">{action.action_text}</p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {action.suggested_timeframe && (
-                      <span className="flex items-center gap-1 text-xs text-zinc-400">
-                        <Clock size={10} />
-                        {action.suggested_timeframe}
-                      </span>
-                    )}
-                    {action.context_tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </li>
+              <ActionItem key={action.id} action={action} />
             ))}
           </ul>
         </div>
@@ -111,7 +170,6 @@ export default async function BookPage({
 
   return (
     <div className="space-y-8">
-      {/* Header */}
       <div className="space-y-4">
         <Link
           href="/books"
@@ -124,9 +182,7 @@ export default async function BookPage({
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold text-zinc-900">{book.title}</h1>
-            {book.author && (
-              <p className="text-zinc-500">{book.author}</p>
-            )}
+            {book.author && <p className="text-zinc-500">{book.author}</p>}
             <div className="flex items-center gap-3 pt-1">
               <span
                 className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLOR[book.status] ?? STATUS_COLOR.reading}`}
@@ -149,7 +205,6 @@ export default async function BookPage({
         </div>
       </div>
 
-      {/* Insights */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 text-sm text-zinc-500">
           <Lightbulb size={14} />

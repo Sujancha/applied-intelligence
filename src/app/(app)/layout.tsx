@@ -2,7 +2,9 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { SignOutButton } from "@/components/SignOutButton";
+import { ProfileCompletionBanner } from "@/components/ProfileCompletionBanner";
 import { BookOpen } from "lucide-react";
+import type { Profile } from "@/types";
 
 export default async function AppLayout({
   children,
@@ -13,14 +15,15 @@ export default async function AppLayout({
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
   if (!user) redirect("/auth/sign-in");
 
-  const { data: profile } = await supabase
+  const { data: profileData } = await supabase
     .from("profiles")
-    .select("display_name")
+    .select("*")
     .eq("id", user.id)
     .single();
+
+  const profile = profileData as Profile | null;
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -37,10 +40,18 @@ export default async function AppLayout({
             {profile && (
               <span className="text-sm text-zinc-500">{profile.display_name}</span>
             )}
+            <Link
+              href="/settings/profile"
+              className="text-sm text-zinc-500 hover:text-zinc-900 transition-colors"
+            >
+              Settings
+            </Link>
             <SignOutButton />
           </div>
         </div>
       </header>
+
+      {profile && <ProfileCompletionBanner profile={profile} />}
 
       <main className="mx-auto max-w-4xl px-6 py-10">{children}</main>
     </div>

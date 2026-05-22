@@ -2,7 +2,8 @@ import type { Book, OutputStyleGuide, Profile } from "@/types";
 
 export function buildInsightSystemPrompt(
   profile: Profile,
-  styleGuide: OutputStyleGuide
+  styleGuide: OutputStyleGuide,
+  secondStyleGuide?: OutputStyleGuide // Nepali guide — only provided when language is "Both"
 ): string {
   const contextLines = [
     `Name: ${profile.display_name}`,
@@ -20,6 +21,37 @@ export function buildInsightSystemPrompt(
     .filter(Boolean)
     .join("\n");
 
+  const styleSection = secondStyleGuide
+    ? `OUTPUT STYLE GUIDE (English):
+${styleGuide.style_instructions}
+
+EXAMPLES OF GOOD OUTPUT (English):
+${styleGuide.examples}
+${styleGuide.anti_examples ? `\nWHAT TO AVOID (English):\n${styleGuide.anti_examples}\n` : ""}
+OUTPUT STYLE GUIDE (Nepali):
+${secondStyleGuide.style_instructions}
+
+EXAMPLES OF GOOD OUTPUT (Nepali):
+${secondStyleGuide.examples}
+${secondStyleGuide.anti_examples ? `\nWHAT TO AVOID (Nepali):\n${secondStyleGuide.anti_examples}\n` : ""}`
+    : `OUTPUT STYLE GUIDE:
+${styleGuide.style_instructions}
+
+EXAMPLES OF GOOD OUTPUT:
+${styleGuide.examples}
+${styleGuide.anti_examples ? `\nWHAT TO AVOID:\n${styleGuide.anti_examples}\n` : ""}`;
+
+  const dualLangInstruction = secondStyleGuide
+    ? `DUAL LANGUAGE OUTPUT:
+The user wants output in BOTH English and Nepali. For every text field (core_idea, why_it_matters, and each action_text), provide the English version first, then the exact separator "---", then the Nepali version in spoken bilingual Devanagari style. Use this exact format:
+
+"core_idea": "The English version here.\\n\\n---\\n\\nNepali version यहाँ spoken style मा, English words naturally mix गर्दै।"
+
+Apply this pattern to core_idea, why_it_matters, and EVERY action_text. Do not skip any field.
+
+`
+    : "";
+
   return `You extract insights from books and turn them into immediate, concrete actions for a specific person. You are ruthlessly specific — never generic.
 
 ABOUT THE PERSON:
@@ -30,13 +62,9 @@ COMMUNICATION STYLE:
 - Directness: ${profile.directness}
 - Humour: ${profile.humour_style}
 
-OUTPUT STYLE GUIDE:
-${styleGuide.style_instructions}
+${styleSection}
 
-EXAMPLES OF GOOD OUTPUT:
-${styleGuide.examples}
-
-${styleGuide.anti_examples ? `WHAT TO AVOID:\n${styleGuide.anti_examples}\n\n` : ""}RULES YOU MUST FOLLOW:
+RULES YOU MUST FOLLOW:
 
 1. Extract ONE core insight from the passage. Not two, not three — one. If the passage contains multiple ideas, pick the one most relevant to this person's actual life contexts.
 
@@ -58,7 +86,7 @@ ${styleGuide.anti_examples ? `WHAT TO AVOID:\n${styleGuide.anti_examples}\n\n` :
 
 7. If the person provided a reaction note about why the passage hit them, PAY CLOSE ATTENTION to it. Their emotional response tells you what matters most. Build the actions around that reaction, not just the text.
 
-Return ONLY valid JSON, no markdown fences, no preamble, no explanation. Use this exact structure:
+${dualLangInstruction}Return ONLY valid JSON, no markdown fences, no preamble, no explanation. Use this exact structure:
 {
   "core_idea": "The single core insight in 1-3 sentences. Plain, direct language. In your own words — do not just quote the passage back.",
   "why_it_matters": "Why this matters specifically for THIS person given their actual life. 2-4 sentences. Name their specific contexts.",

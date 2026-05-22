@@ -9,6 +9,15 @@ import {
 import { redirect } from "next/navigation";
 import type { Book, InsightAIResponse, OutputStyleGuide, Profile } from "@/types";
 
+const SUPPORTED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+] as const;
+
+type ImageMediaType = (typeof SUPPORTED_IMAGE_TYPES)[number];
+
 export async function extractInsight(bookId: string, formData: FormData) {
   const supabase = await createClient();
   const {
@@ -16,12 +25,30 @@ export async function extractInsight(bookId: string, formData: FormData) {
   } = await supabase.auth.getUser();
   if (!user) redirect("/auth/sign-in");
 
-  const passage = (formData.get("passage") as string)?.trim();
-  const reactionNote = (formData.get("reaction_note") as string)?.trim() || undefined;
+  const sourceType = (formData.get("source_type") as string) || "text";
+  const passage = (formData.get("passage") as string)?.trim() || undefined;
+  const reactionNote =
+    (formData.get("reaction_note") as string)?.trim() || undefined;
 
-  if (!passage) throw new Error("Passage is required");
+  // Validate inputs
+  if (sourceType === "text" && !passage) throw new Error("Passage is required");
 
-  // Fetch profile (required for personalisation)
+  // Handle image
+  let imageData: string | undefined;
+  let imageMediaType: ImageMediaType | undefined;
+
+  if (sourceType === "image") {
+    const imageFile = formData.get("image") as File | null;
+    if (!imageFile || imageFile.size === 0) throw new Error("Image is required");
+    if (!(SUPPORTED_IMAGE_TYPES as readonly string[]).includes(imageFile.type)) {
+      throw new Error(`Unsupported image type: ${imageFile.type}. Use JPG, PNG, or WEBP.`);
+    }
+    const buffer = await imageFile.arrayBuffer();
+    imageData = Buffer.from(buffer).toString("base64");
+    imageMediaType = imageFile.type as ImageMediaType;
+  }
+
+  // Fetch profile
   const { data: profileData } = await supabase
     .from("profiles")
     .select("*")
@@ -29,6 +56,43 @@ export async function extractInsight(bookId: string, formData: FormData) {
     .single();
   if (!profileData) redirect("/onboarding");
   const profile = profileData as Profile;
+
+  // Determine effective output language (per-extract override takes priority)
+  const effectiveLanguage =
+    (formData.get("output_language") as string) ||
+    profile.default_output_language;
+
+  // Fetch style guide(s)
+  let styleGuide: OutputStyleGuide;
+  let secondStyleGuide: OutputStyleGuide | undefined;
+
+  if (effectiveLanguage === "Both") {
+    const [{ data: enData }, { data: neData }] = await Promise.all([
+      supabase
+        .from("output_style_guides")
+        .select("*")
+        .eq("language", "English")
+        .single(),
+      supabase
+        .from("output_style_guides")
+        .select("*")
+        .eq("language", "Nepali")
+        .single(),
+    ]);
+    if (!enData || !neData)
+      throw new Error("Style guides not found — check DB seed");
+    styleGuide = enData as OutputStyleGuide;
+    secondStyleGuide = neData as OutputStyleGuide;
+  } else {
+    const { data: guideData } = await supabase
+      .from("output_style_guides")
+      .select("*")
+      .eq("language", effectiveLanguage)
+      .single();
+    if (!guideData)
+      throw new Error("Style guide not found — check DB seed");
+    styleGuide = guideData as OutputStyleGuide;
+  }
 
   // Fetch book
   const { data: bookData } = await supabase
@@ -40,24 +104,40 @@ export async function extractInsight(bookId: string, formData: FormData) {
   if (!bookData) throw new Error("Book not found");
   const book = bookData as Book;
 
-  // Fetch style guide for user's preferred language
-  const { data: styleGuideData } = await supabase
-    .from("output_style_guides")
-    .select("*")
-    .eq("language", profile.default_output_language)
-    .single();
-  if (!styleGuideData) throw new Error("Style guide not found — check DB seed");
-  const styleGuide = styleGuideData as OutputStyleGuide;
-
   // Build prompts
-  const systemPrompt = buildInsightSystemPrompt(profile, styleGuide);
-  const userMessage = buildInsightUserPrompt({ book, passage, reactionNote });
+  const systemPrompt = buildInsightSystemPrompt(
+    profile,
+    styleGuide,
+    secondStyleGuide
+  );
+
+  let userMessage: string;
+  if (sourceType === "image") {
+    const bookLine = `Book: "${book.title}"${book.author ? ` by ${book.author}` : ""}${book.genre ? ` (${book.genre})` : ""}`;
+    const reactionLine = reactionNote
+      ? `\nMy reaction / why this hit me: ${reactionNote}\n`
+      : "";
+    const contextLine = passage ? `\nAdditional context: ${passage}\n` : "";
+    userMessage = `First, extract all readable text from this book page image. Then analyse the extracted text and provide the insight.\n\n${bookLine}${reactionLine}${contextLine}`;
+  } else {
+    userMessage = buildInsightUserPrompt({
+      book,
+      passage: passage!,
+      reactionNote,
+    });
+  }
 
   // Call Claude
   const startTime = Date.now();
-  const { text: rawResponse, inputTokens, outputTokens } = await callClaude({
+  const {
+    text: rawResponse,
+    inputTokens,
+    outputTokens,
+  } = await callClaude({
     systemPrompt,
     userMessage,
+    imageData,
+    imageMediaType,
   });
   const latencyMs = Date.now() - startTime;
 
@@ -66,7 +146,9 @@ export async function extractInsight(bookId: string, formData: FormData) {
   try {
     parsed = JSON.parse(rawResponse);
   } catch {
-    throw new Error(`Claude returned non-JSON. Raw: ${rawResponse.slice(0, 200)}`);
+    throw new Error(
+      `Claude returned non-JSON. Raw: ${rawResponse.slice(0, 200)}`
+    );
   }
 
   // Save insight
@@ -75,13 +157,15 @@ export async function extractInsight(bookId: string, formData: FormData) {
     .insert({
       user_id: user.id,
       book_id: bookId,
-      source_type: "text",
-      source_text: passage,
+      source_type: sourceType === "image" ? "image" : "text",
+      source_text: sourceType === "text" ? (passage ?? null) : null,
+      // TODO: Upload image to Supabase Storage and save URL in source_image_url
+      source_image_url: null,
       user_reaction_note: reactionNote ?? null,
       ai_core_idea: parsed.core_idea,
       ai_why_it_matters: parsed.why_it_matters,
       ai_raw_response: parsed,
-      output_language: profile.default_output_language,
+      output_language: effectiveLanguage,
     })
     .select("id")
     .single();
@@ -106,7 +190,13 @@ export async function extractInsight(bookId: string, formData: FormData) {
     user_id: user.id,
     module: "books",
     action: "extract_insight",
-    input_payload: { book_id: bookId, passage, reaction_note: reactionNote ?? null },
+    input_payload: {
+      book_id: bookId,
+      source_type: sourceType,
+      passage: sourceType === "text" ? passage : null,
+      reaction_note: reactionNote ?? null,
+      output_language: effectiveLanguage,
+    },
     output_payload: parsed,
     model_used: "claude-sonnet-4-20250514",
     tokens_input: inputTokens,
@@ -121,7 +211,9 @@ export async function extractInsight(bookId: string, formData: FormData) {
     resurfaceDays.map((days) => ({
       user_id: user.id,
       insight_id: insight.id,
-      scheduled_for: new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString(),
+      scheduled_for: new Date(
+        now.getTime() + days * 24 * 60 * 60 * 1000
+      ).toISOString(),
       resurface_type: `${days}d`,
     }))
   );
